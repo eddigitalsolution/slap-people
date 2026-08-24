@@ -35,7 +35,7 @@ export class EffectsManager {
 
     for (let i = 0; i < this._POOL_SZ; i++) {
       const mat  = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false });
-      const mesh = new THREE.Mesh(geos[i % geos.length].clone(), mat);
+      const mesh = new THREE.Mesh(geos[i % geos.length], mat);
       mesh.visible = false;
       this.scene.add(mesh);
 

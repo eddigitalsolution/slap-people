@@ -31,6 +31,10 @@ export class SceneBuilder {
     this._shakeI   = 0;   // intensity
     this._shakeDur = 0;
     this._shakeT   = 0;
+
+    // Allocate reusable objects to avoid GC overhead in game loops
+    this._handTarget = new THREE.Vector3();
+    this._handScaleTarget = new THREE.Vector3(1.15, 1.15, 1.15);
   }
 
   // ── Boot ──────────────────────────────────────────────
@@ -326,8 +330,8 @@ export class SceneBuilder {
   updateVirtualHand(pos, slapActive, slapProgress) {
     if (!this.virtualHand) return;
 
-    const target = new THREE.Vector3(pos.x, pos.y, pos.z);
-    this.virtualHand.position.lerp(target, 0.14);
+    this._handTarget.set(pos.x, pos.y, pos.z);
+    this.virtualHand.position.lerp(this._handTarget, 0.14);
 
     // Slight roll based on horizontal velocity
     this.virtualHand.rotation.z += (-(pos.tiltZ || 0) - this.virtualHand.rotation.z) * 0.12;
@@ -340,8 +344,7 @@ export class SceneBuilder {
       const sc = 1.15 + slapProgress * 0.45;
       this.virtualHand.scale.setScalar(sc);
     } else {
-      const targetSc = new THREE.Vector3(1.15, 1.15, 1.15);
-      this.virtualHand.scale.lerp(targetSc, 0.12);
+      this.virtualHand.scale.lerp(this._handScaleTarget, 0.12);
     }
   }
 
