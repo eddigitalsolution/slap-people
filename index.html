@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slap King AI 👋</title>
+  <meta name="description" content="Use your hand through webcam to slap cartoon bosses in this wild 3D browser game powered by MediaPipe hand tracking!">
+  <meta name="theme-color" content="#07071a">
+
+  <!-- Google Fonts preconnect -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Nunito:wght@400;600;800;900&display=swap" rel="stylesheet">
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── Three.js canvas ───────────────────────────────── -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- ── Impact flash overlay ─────────────────────────── -->
+  <div id="impact-flash"></div>
+
+  <!-- ── Webcam preview (bottom-right) ────────────────── -->
+  <div id="webcam-container">
+    <video id="webcam-video" autoplay muted playsinline></video>
+    <div id="webcam-label">📷 HAND TRACKING</div>
+    <div id="hand-indicator">✋</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       LOADING SCREEN
+       ═══════════════════════════════════════════════════ -->
+  <div id="loading-screen">
+    <div class="loading-content">
+      <h1 class="loading-title">SLAP KING AI</h1>
+      <div class="loading-bar-container">
+        <div class="loading-bar" id="loading-bar"></div>
+      </div>
+      <div class="loading-text" id="loading-text">Initialising…</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       MAIN MENU
+       ═══════════════════════════════════════════════════ -->
+  <div id="main-menu" class="screen hidden">
+    <div class="menu-content">
+      <div class="title-container">
+        <h1 class="game-title">SLAP<br>KING<br><span class="ai-text">AI</span></h1>
+        <p class="title-subtitle">Use your hand · Slap your enemies</p>
+      </div>
+
+      <div class="menu-buttons">
+        <button class="menu-btn primary" id="btn-start">👋 START GAME</button>
+        <button class="menu-btn"         id="btn-tutorial">📖 TUTORIAL</button>
+        <button class="menu-btn"         id="btn-settings">⚙️ SETTINGS</button>
+        <button class="menu-btn"         id="btn-leaderboard">🏆 LEADERBOARD</button>
+      </div>
+
+      <div class="menu-footer">
+        High Score: <strong id="high-score-display">0</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       TUTORIAL
+       ═══════════════════════════════════════════════════ -->
+  <div id="tutorial-screen" class="screen hidden">
+    <div class="tutorial-content">
+      <h2 class="tutorial-title">HOW TO PLAY</h2>
+
+      <div class="tutorial-steps">
+        <div class="tutorial-step active" data-step="1">
+          <div class="step-icon">📷</div>
+          <h3>Step 1 — Setup Camera</h3>
+          <p>Allow webcam access when prompted. Position yourself so your hand is clearly visible. No data leaves your device.</p>
+        </div>
+        <div class="tutorial-step" data-step="2">
+          <div class="step-icon">✋</div>
+          <h3>Step 2 — Open Your Palm</h3>
+          <p>Hold your open hand flat in front of the camera. The giant virtual hand will mirror your movements in 3D.</p>
+        </div>
+        <div class="tutorial-step" data-step="3">
+          <div class="step-icon">💨</div>
+          <h3>Step 3 — Move Fast</h3>
+          <p>Move your hand quickly across your body. The faster you move, the more powerful your slap!</p>
+        </div>
+        <div class="tutorial-step" data-step="4">
+          <div class="step-icon">👊</div>
+          <h3>Step 4 — Slap!</h3>
+          <p>Swing sideways fast to trigger a slap. Land hits in quick succession to build COMBO multipliers for massive damage.</p>
+        </div>
+        <div class="tutorial-step" data-step="5">
+          <div class="step-icon">💀</div>
+          <h3>Step 5 — Defeat the Boss!</h3>
+          <p>Drain the boss HP bar before the timer hits zero. Win to unlock the next, tougher boss. Beat all 5 to become Slap King!</p>
+        </div>
+      </div>
+
+      <div class="tutorial-nav">
+        <button class="tutorial-btn" id="tut-prev">← Back</button>
+        <div class="step-dots">
+          <span class="dot active"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <button class="tutorial-btn primary" id="tut-next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SETTINGS
+       ═══════════════════════════════════════════════════ -->
+  <div id="settings-screen" class="screen hidden">
+    <div class="settings-content">
+      <h2 class="settings-title">⚙️ SETTINGS</h2>
+
+      <div class="setting-row">
+        <label for="toggle-sfx">Sound Effects</label>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-sfx" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label for="toggle-shake">Screen Shake</label>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-shake" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label for="toggle-particles">Particles</label>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-particles" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label for="slap-sensitivity">Slap Sensitivity</label>
+        <input type="range" id="slap-sensitivity" class="slider" min="1" max="5" value="3">
+      </div>
+
+      <div class="setting-row">
+        <label for="toggle-mouse-mode">Mouse / Touch Mode <small style="opacity:.5">(no webcam)</small></label>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-mouse-mode">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <button class="menu-btn primary" id="btn-settings-back">← Back to Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       LEADERBOARD
+       ═══════════════════════════════════════════════════ -->
+  <div id="leaderboard-screen" class="screen hidden">
+    <div class="leaderboard-content">
+      <h2 class="leaderboard-title">🏆 LEADERBOARD</h2>
+      <div id="leaderboard-list"></div>
+      <button class="menu-btn primary" id="btn-lb-back">← Back to Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       WEBCAM PERMISSION PROMPT
+       ═══════════════════════════════════════════════════ -->
+  <div id="webcam-prompt" class="screen hidden">
+    <div class="prompt-content">
+      <div class="prompt-icon">📷</div>
+      <h2>Camera Access</h2>
+      <p>Slap King AI tracks your hand via webcam to power the giant virtual hand in 3D.</p>
+      <p style="font-size:.9rem;color:rgba(255,255,255,.4)">No video is stored or sent anywhere.</p>
+      <button class="menu-btn primary" id="btn-grant-webcam">✅ Allow Camera</button>
+      <button class="menu-btn"         id="btn-skip-webcam">🖱️ Use Mouse Instead</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       HUD (in-game overlay)
+       ═══════════════════════════════════════════════════ -->
+  <div id="hud" class="hidden">
+    <!-- Top row: Score | Boss HP | Timer -->
+    <div class="hud-top">
+      <div class="hud-score">
+        <div class="hud-label">SCORE</div>
+        <div class="hud-value" id="score-display">0</div>
+      </div>
+
+      <div class="hud-center-top">
+        <div class="boss-info">
+          <div id="boss-name-display">Boss Name</div>
+          <div class="boss-hp-container">
+            <div class="boss-hp-bar" id="boss-hp-bar" style="width:100%"></div>
+            <div class="boss-hp-text" id="boss-hp-text">100 / 100</div>
+          </div>
+          <div id="boss-level-display">LEVEL 1</div>
+        </div>
+      </div>
+
+      <div class="hud-timer">
+        <div class="hud-label">TIME</div>
+        <div class="hud-value" id="timer-display">60</div>
+      </div>
+    </div>
+
+    <!-- Bottom: Combo meter + mode hint -->
+    <div class="hud-bottom">
+      <div class="combo-meter">
+        <div class="combo-label">COMBO</div>
+        <div class="combo-value" id="combo-display">×1</div>
+        <div class="combo-bar-container">
+          <div class="combo-bar" id="combo-bar"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tracking mode pill (bottom-left) -->
+    <div id="track-mode-pill" style="
+      position:absolute; bottom:1rem; left:1rem;
+      background:rgba(0,0,0,.55); backdrop-filter:blur(8px);
+      border:1px solid rgba(255,255,255,.15); border-radius:50px;
+      padding:0.35rem 0.9rem; font-size:0.72rem; letter-spacing:2px;
+      font-weight:800; text-transform:uppercase; color:rgba(255,255,255,.6);
+      pointer-events:none; display:flex; align-items:center; gap:0.5rem;
+    ">
+      <span id="track-mode-icon">🖥️</span>
+      <span id="track-mode-text">MOUSE MODE — MOVE FAST or CLICK to slap</span>
+      <span id="track-vel" style="color:var(--cyan); font-family:'Bangers',cursive; font-size:1rem;"></span>
+    </div>
+  </div>
+
+  <!-- ── Floating damage numbers container ────────────── -->
+  <div id="damage-numbers"></div>
+
+  <!-- ═══════════════════════════════════════════════════
+       BOSS DEFEATED SCREEN
+       ═══════════════════════════════════════════════════ -->
+  <div id="boss-defeat-screen" class="screen hidden">
+    <div class="defeat-content">
+      <div class="defeat-emoji">💥</div>
+      <h2 id="defeat-title">BOSS DEFEATED!</h2>
+      <div id="defeat-rewards"></div>
+      <button class="menu-btn primary" id="btn-next-boss">NEXT BOSS →</button>
+      <button class="menu-btn"         id="btn-defeat-quit">🏠 QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       VICTORY SCREEN
+       ═══════════════════════════════════════════════════ -->
+  <div id="victory-screen" class="screen hidden">
+    <div class="victory-content">
+      <div class="victory-emoji">👑</div>
+      <h2>YOU ARE SLAP KING!</h2>
+      <div class="victory-stats">
+        Final Score: <strong id="victory-score">0</strong><br>
+        All 5 Bosses Defeated!
+      </div>
+      <button class="menu-btn primary" id="btn-play-again">👋 PLAY AGAIN</button>
+      <button class="menu-btn"         id="btn-victory-menu">🏠 Main Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       GAME OVER SCREEN
+       ═══════════════════════════════════════════════════ -->
+  <div id="game-over-screen" class="screen hidden">
+    <div class="game-over-content">
+      <div class="game-over-emoji">💀</div>
+      <h2>GAME OVER</h2>
+      <div id="game-over-reason">Time's up!</div>
+      <div class="game-over-score">Score: <strong id="game-over-score">0</strong></div>
+      <button class="menu-btn primary" id="btn-retry">🔄 TRY AGAIN</button>
+      <button class="menu-btn"         id="btn-go-menu">🏠 Main Menu</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       ACHIEVEMENT TOAST (fixed top-right)
+       ═══════════════════════════════════════════════════ -->
+  <div id="achievement-toast" class="hidden">
+    <div class="achievement-icon">🏆</div>
+    <div class="achievement-text">
+      <div class="achievement-label">ACHIEVEMENT UNLOCKED</div>
+      <div id="achievement-name">First Slap!</div>
+    </div>
+  </div>
+
+  <!-- ── Game entry point ──────────────────────────────── -->
+  <script type="module" src="main.js"></script>
+</body>
+</html>
