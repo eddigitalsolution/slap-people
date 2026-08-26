@@ -270,7 +270,7 @@ gameState.on('slap', slapEvent => {
   const comboTier = combo.hit();
   const totalDmg  = (baseDmg + swingBonus) * comboTier.mult;
 
-  boss.takeDamage(totalDmg);
+  boss.takeDamage(totalDmg, slapEvent.velocity);
   gameState.addScore(totalDmg * 10);
 
   // World position of boss (approx centre)
@@ -279,12 +279,23 @@ gameState.on('slap', slapEvent => {
   // Particle burst
   effects.spawnBurst(bossWorldPos, { weak: 12, normal: 22, strong: 38, critical: 65 }[slapEvent.level], slapEvent.level);
   effects.spawnImpactLines(bossWorldPos, slapEvent.level);
+  effects.spawnShockwave(bossWorldPos, slapEvent.level);
+  if (slapEvent.level === 'critical' || slapEvent.level === 'strong') {
+    effects.spawnStars(bossWorldPos, slapEvent.level === 'critical' ? 14 : 7);
+  }
 
   // Impact flash
   effects.triggerImpactFlash(slapEvent.level);
 
   // Slow-mo on critical
   if (slapEvent.level === 'critical') effects.triggerSlowMotion(0.75);
+
+  // Camera zoom focus
+  if (slapEvent.level === 'critical') {
+    scene3d.triggerCameraZoom(1.8);
+  } else if (slapEvent.level === 'strong') {
+    scene3d.triggerCameraZoom(0.95);
+  }
 
   // Camera shake
   if (settings.shake) {
@@ -305,9 +316,16 @@ gameState.on('slap', slapEvent => {
 
   // Floating damage text
   const sp = _worldToScreen(bossWorldPos);
-  const txt = slapEvent.level === 'critical'
-    ? `CRITICAL! ${totalDmg}`
-    : `+${totalDmg}`;
+  
+  const comicWords = {
+    weak:     ['TAP!', 'SLAP!', 'BOOP!'],
+    normal:   ['WHACK!', 'SLAP!', 'CLOBBER!'],
+    strong:   ['BAM!', 'POW!', 'SMASH!'],
+    critical: ['MEGA SLAP!', 'CRITICAL!', 'HOLY MOLY!', 'KABOOM!']
+  };
+  const words = comicWords[slapEvent.level] ?? ['SLAP!'];
+  const chosenWord = words[Math.floor(Math.random() * words.length)];
+  const txt = `${chosenWord} +${Math.round(totalDmg)}`;
   ui.showDamageNumber(txt, sp.x, sp.y - 40, slapEvent.level);
 
   if (slapEvent.isSwing && swingBonus > 0) {
@@ -426,7 +444,7 @@ function loop() {
     boss.update(dt, elapsed);
 
     // ── Virtual hand position & slap lunge ──────────
-    const wPos = hand.getWorldPosition(7.2);
+    const wPos = hand.getWorldPosition(8.8);
     wPos.tiltZ = -hand.velocity.x * 2.8;
 
     if (slapAnim.active) {

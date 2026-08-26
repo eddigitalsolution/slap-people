@@ -25,6 +25,12 @@ export class BossManager {
     this.currentHp = 0;
     this._tauntTimer = 0;
 
+    // Spring-damper physics properties
+    this.wobbleAngleX = 0;
+    this.wobbleAngleZ = 0;
+    this.wobbleVelX = 0;
+    this.wobbleVelZ = 0;
+
     this._roster = [
       {
         name:     'Mr. Stress',
@@ -75,7 +81,14 @@ export class BossManager {
     this.bossState  = 'IDLE';
     this._tauntTimer = 0;
 
+    // Reset spring wobble state
+    this.wobbleAngleX = 0;
+    this.wobbleAngleZ = 0;
+    this.wobbleVelX = 0;
+    this.wobbleVelZ = 0;
+
     this.currentBossGroup = data.create();
+    this._addOutlines(this.currentBossGroup);
     this.currentBossGroup.position.y = -8;   // start below stage
     this.scene.add(this.currentBossGroup);
 
@@ -95,9 +108,29 @@ export class BossManager {
     return data;
   }
 
+  // Helper to add cartoon outline meshes
+  _addOutlines(group) {
+    const outlineMat = new THREE.MeshBasicMaterial({
+      color: 0x07071a,
+      side: THREE.BackSide
+    });
+    const meshes = [];
+    group.traverse(c => {
+      if (c.isMesh && !c.userData.isOutline) {
+        meshes.push(c);
+      }
+    });
+    meshes.forEach(c => {
+      const outline = new THREE.Mesh(c.geometry, outlineMat);
+      outline.userData.isOutline = true;
+      outline.scale.set(1.08, 1.08, 1.08);
+      c.add(outline);
+    });
+  }
+
   // ── Damage ────────────────────────────────────────────
 
-  takeDamage(amount) {
+  takeDamage(amount, velocity = null) {
     if (this.bossState === 'DEFEATED' || !this.currentBossGroup) return;
 
     this.currentHp = Math.max(0, this.currentHp - amount);
@@ -108,35 +141,46 @@ export class BossManager {
       damage: amount,
     });
 
+    // Apply mechanical tilt force based on slap direction/speed
+    if (velocity) {
+      this.wobbleVelZ -= velocity.x * 24;
+      this.wobbleVelX += velocity.y * 24;
+    } else {
+      // Random tilt if no velocity passed
+      const force = 10 + Math.random() * 10;
+      this.wobbleVelZ += (Math.random() > 0.5 ? 1 : -1) * force;
+    }
+
     if (this.currentHp <= 0) {
       this._defeatBoss();
     } else {
-      this._playHitAnim();
+      this._playHitAnim(amount);
     }
   }
 
-  _playHitAnim() {
+  _playHitAnim(amount) {
     if (!this.currentBossGroup) return;
     this.bossState = 'HIT';
 
     // Flash red
     this.currentBossGroup.traverse(c => {
-      if (!c.isMesh || !c.material) return;
+      if (!c.isMesh || !c.material || c.userData.isOutline) return;
       const orig = c.material.color.getHex();
       c.material.color.setHex(0xff3333);
       setTimeout(() => { if (c.material) c.material.color.setHex(orig); }, 120);
     });
 
-    const dir = Math.random() > 0.5 ? 1 : -1;
-    gsap.timeline()
-      .to(this.currentBossGroup.position, { x: dir * 1.8, duration: 0.07, ease: 'power4.out' })
-      .to(this.currentBossGroup.position, { x: 0, duration: 0.38, ease: 'elastic.out(1, 0.4)' });
+    // Squash & Stretch based on damage scaling
+    const intensity = Math.min(amount / 50, 1.5);
+    const stretchX = 1.0 + intensity * 0.4;
+    const squashY = 1.0 - intensity * 0.25;
 
+    gsap.killTweensOf(this.currentBossGroup.scale);
     gsap.timeline()
-      .to(this.currentBossGroup.scale, { x: 1.45, y: 0.75, z: 1.45, duration: 0.07 })
-      .to(this.currentBossGroup.scale, { x: 1, y: 1, z: 1, duration: 0.45, ease: 'elastic.out(1, 0.4)' });
+      .to(this.currentBossGroup.scale, { x: stretchX, y: squashY, z: stretchX, duration: 0.05, ease: 'power2.out' })
+      .to(this.currentBossGroup.scale, { x: 1, y: 1, z: 1, duration: 0.65, ease: 'elastic.out(1.1, 0.3)' });
 
-    setTimeout(() => { if (this.bossState !== 'DEFEATED') this.bossState = 'IDLE'; }, 500);
+    setTimeout(() => { if (this.bossState !== 'DEFEATED') this.bossState = 'IDLE'; }, 600);
   }
 
   _defeatBoss() {
@@ -157,10 +201,40 @@ export class BossManager {
   update(dt, time) {
     if (!this.currentBossGroup || this.bossState === 'DEFEATED') return;
 
-    if (this.bossState === 'IDLE') {
-      // Idle bob
+    // Apply spring physics for tilt/wobble
+    const stiffness = 160;
+    const damping = 8;
+    const accelX = -stiffness * this.wobbleAngleX - damping * this.wobbleVelX;
+    const accelZ = -stiffness * this.wobbleAngleZ - damping * this.wobbleVelZ;
+
+    this.wobbleVelX += accelX * dt;
+    this.wobbleVelZ += accelZ * dt;
+    this.wobbleAngleX += this.wobbleVelX * dt;
+    this.wobbleAngleZ += this.wobbleVelZ * dt;
+
+    if (this.bossState === 'IDLE' || this.bossState === 'HIT') {
+      // Idle bobbing
       this.currentBossGroup.position.y = Math.sin(time * 1.4) * 0.22;
       this.currentBossGroup.rotation.y = Math.sin(time * 0.7) * 0.14;
+
+      // Apply spring wobble
+      this.currentBossGroup.rotation.x = this.wobbleAngleX;
+      this.currentBossGroup.rotation.z = this.wobbleAngleZ;
+
+      // Low-HP Emissive pulsing (< 30% HP)
+      const data = this._roster[this.currentBossIndex];
+      const hpPct = this.currentHp / data.maxHp;
+      if (hpPct < 0.3) {
+        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(time * 8.0));
+        this.currentBossGroup.traverse(c => {
+          if (c.isMesh && c.material && c.material.emissive && !c.userData.isOutline) {
+            if (!c.userData.origEmissive) {
+              c.userData.origEmissive = c.material.emissive.clone();
+            }
+            c.material.emissive.copy(c.userData.origEmissive).multiplyScalar(pulse * 3.0);
+          }
+        });
+      }
 
       // Random taunts
       this._tauntTimer += dt;
@@ -181,6 +255,18 @@ export class BossManager {
 
   _removeCurrent() {
     if (this.currentBossGroup) {
+      this.currentBossGroup.traverse(c => {
+        if (c.isMesh) {
+          if (c.geometry) c.geometry.dispose();
+          if (c.material) {
+            if (Array.isArray(c.material)) {
+              c.material.forEach(m => m.dispose());
+            } else {
+              c.material.dispose();
+            }
+          }
+        }
+      });
       this.scene.remove(this.currentBossGroup);
       this.currentBossGroup = null;
     }

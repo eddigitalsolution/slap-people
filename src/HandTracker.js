@@ -43,6 +43,9 @@ export class HandTracker {
 
     // External callback so main.js can inject a "force slap" (click/tap)
     this.onForceSlap  = null;
+
+    // Cache object to prevent frame-rate allocation overhead
+    this._cachedWorldPos = { x: 0, y: 0, z: 0, tiltZ: 0 };
   }
 
   // ── Initialisation ─────────────────────────────────────
@@ -307,10 +310,9 @@ export class HandTracker {
    * Mirrors X axis so movement feels natural.
    */
   getWorldPosition(z = 7) {
-    return {
-      x: (1 - this.smoothedPalm.x) * 8 - 4,   // mirror → [-4, 4]
-      y: (1 - this.smoothedPalm.y) * 5 - 0.5,  // flip   → [4.5, -0.5]
-      z,
-    };
+    this._cachedWorldPos.x = (1 - this.smoothedPalm.x) * 8 - 4;
+    this._cachedWorldPos.y = (1 - this.smoothedPalm.y) * 5 - 0.5;
+    this._cachedWorldPos.z = z;
+    return this._cachedWorldPos;
   }
 }

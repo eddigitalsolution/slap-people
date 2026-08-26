@@ -63,9 +63,23 @@ export class SlapDetector {
 
     if (!level) return null;
 
-    // Detect if movement is predominantly horizontal (swing)
-    const isSwing = Math.abs(this.handTracker.velocity.x) > Math.abs(this.handTracker.velocity.y) * 1.2;
-    const swingBonus = isSwing ? Math.floor(adjSpeed * 25) : 0;
+    // Determine slap direction based on velocity ratios
+    const vx = this.handTracker.velocity.x;
+    const vy = this.handTracker.velocity.y;
+    const absX = Math.abs(vx);
+    const absY = Math.abs(vy);
+    
+    let direction = 'horizontal';
+    if (absY > absX * 1.5) {
+      direction = vy < 0 ? 'smash' : 'uppercut';
+    } else if (absX > absY * 1.5) {
+      direction = 'horizontal';
+    } else {
+      direction = 'diagonal';
+    }
+
+    const isSwing = direction === 'horizontal' || direction === 'diagonal';
+    const swingBonus = isSwing ? Math.floor(adjSpeed * 30) : (direction === 'smash' ? Math.floor(adjSpeed * 40) : 10);
 
     this.lastSlapTime = currentTime;
     const slapEvent = {
@@ -75,6 +89,7 @@ export class SlapDetector {
       position: { ...this.handTracker.smoothedPalm },
       isSwing,
       swingBonus,
+      direction,
     };
 
     this.gameState.emit('slap', slapEvent);

@@ -28,6 +28,7 @@ export class SceneBuilder {
 
     // Camera shake state
     this._camBase  = new THREE.Vector3(0, 2.5, 10);
+    this._camTarget = this._camBase.clone();
     this._shakeI   = 0;   // intensity
     this._shakeDur = 0;
     this._shakeT   = 0;
@@ -123,10 +124,30 @@ export class SceneBuilder {
   // ── Arena ─────────────────────────────────────────────
 
   _buildArena() {
+    // Generate retro neon grid texture on canvas
+    const gridCanvas = document.createElement('canvas');
+    gridCanvas.width = 128;
+    gridCanvas.height = 128;
+    const ctx = gridCanvas.getContext('2d');
+    ctx.fillStyle = '#08081c';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.strokeStyle = '#ff0099';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, 128, 128);
+    
+    const gridTex = new THREE.CanvasTexture(gridCanvas);
+    gridTex.wrapS = THREE.RepeatWrapping;
+    gridTex.wrapT = THREE.RepeatWrapping;
+    gridTex.repeat.set(24, 24);
+
     // Floor
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(60, 60, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0x0e0e28, roughness: 0.8, metalness: 0.3 })
+      new THREE.MeshStandardMaterial({
+        map: gridTex,
+        roughness: 0.15,
+        metalness: 0.85
+      })
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -4;
@@ -211,10 +232,18 @@ export class SceneBuilder {
     );
     this.scene.add(stars);
 
-    // Floating decorative octahedra
+    // Floating decorative cartoon shapes
+    const starGeos = [
+      new THREE.TorusGeometry(0.24, 0.08, 8, 16),
+      new THREE.ConeGeometry(0.2, 0.45, 6),
+      new THREE.BoxGeometry(0.26, 0.26, 0.26),
+      new THREE.OctahedronGeometry(0.28)
+    ];
+
     for (let i = 0; i < 25; i++) {
+      const g = starGeos[i % starGeos.length];
       const star = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.18 + Math.random() * 0.28),
+        g,
         new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(Math.random(), 1, 0.7) })
       );
       star.position.set(
@@ -280,8 +309,30 @@ export class SceneBuilder {
     group.rotation.y = Math.PI;
     group.scale.setScalar(1.15);
 
+    // Add cartoon outlines to the hand
+    this._addOutlines(group);
+
     this.virtualHand = group;
     this.scene.add(group);
+  }
+
+  _addOutlines(group) {
+    const outlineMat = new THREE.MeshBasicMaterial({
+      color: 0x07071a,
+      side: THREE.BackSide
+    });
+    const meshes = [];
+    group.traverse(c => {
+      if (c.isMesh && !c.userData.isOutline) {
+        meshes.push(c);
+      }
+    });
+    meshes.forEach(c => {
+      const outline = new THREE.Mesh(c.geometry, outlineMat);
+      outline.userData.isOutline = true;
+      outline.scale.set(1.08, 1.08, 1.08);
+      c.add(outline);
+    });
   }
 
   // ── Menu background hands ─────────────────────────────
@@ -337,8 +388,8 @@ export class SceneBuilder {
     this.virtualHand.rotation.z += (-(pos.tiltZ || 0) - this.virtualHand.rotation.z) * 0.12;
 
     if (slapActive) {
-      // Lunge forward: z goes from ~7 → ~1 at peak, then returns
-      const lungeZ = pos.z - slapProgress * 6.5;
+      // Lunge forward: z goes from ~8.8 → ~0.7 at peak, then returns
+      const lungeZ = pos.z - slapProgress * 8.1;
       this.virtualHand.position.z = lungeZ;
 
       const sc = 1.15 + slapProgress * 0.45;
@@ -368,7 +419,13 @@ export class SceneBuilder {
     }
   }
 
-  // ── Camera shake ──────────────────────────────────────
+  // ── Camera shake & zoom ──────────────────────────────────
+
+  triggerCameraZoom(zoomAmount) {
+    this._camBase.set(0, 2.5 - zoomAmount * 0.5, 10 - zoomAmount);
+    gsap.killTweensOf(this._camTarget);
+    this._camTarget.set(0, 2.5, 10);
+  }
 
   shakeCamera(intensity, duration) {
     this._shakeI   = intensity;
@@ -377,15 +434,20 @@ export class SceneBuilder {
   }
 
   updateCamera(dt) {
+    // Lerp base position for zoom recovery
+    this._camBase.lerp(this._camTarget, 0.08);
+
     if (this._shakeT > 0) {
       this._shakeT -= dt;
       const t = this._shakeT / this._shakeDur;
       const a = this._shakeI * t;
       this.camera.position.x = this._camBase.x + (Math.random() - 0.5) * a;
       this.camera.position.y = this._camBase.y + (Math.random() - 0.5) * a;
+      this.camera.rotation.z = (Math.random() - 0.5) * a * 0.45; // Rotational camera shake
     } else {
-      this.camera.position.x += (this._camBase.x - this.camera.position.x) * 0.1;
-      this.camera.position.y += (this._camBase.y - this.camera.position.y) * 0.1;
+      this.camera.position.x += (this._camBase.x - this.camera.position.x) * 0.15;
+      this.camera.position.y += (this._camBase.y - this.camera.position.y) * 0.15;
+      this.camera.rotation.z += (0 - this.camera.rotation.z) * 0.15;
     }
   }
 

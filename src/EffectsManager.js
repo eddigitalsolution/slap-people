@@ -31,6 +31,7 @@ export class EffectsManager {
       new THREE.BoxGeometry(0.12, 0.12, 0.12),
       new THREE.SphereGeometry(0.10, 6, 6),
       new THREE.TetrahedronGeometry(0.14),
+      new THREE.TorusGeometry(0.35, 0.03, 8, 24), // shockwave geometry
     ];
 
     for (let i = 0; i < this._POOL_SZ; i++) {
@@ -46,6 +47,7 @@ export class EffectsManager {
         maxLife: 1,
         active:  false,
         baseScale: 1,
+        userData: {}
       });
     }
   }
@@ -71,7 +73,7 @@ export class EffectsManager {
     const spd    = speeds[slapLevel]   ?? 7;
 
     for (let i = 0; i < count; i++) {
-      const p = this._getFree();
+      const p = this._pool.find(item => !item.active && item.mesh.geometry.type !== 'TorusGeometry');
       if (!p) break;
 
       p.mesh.position.copy(position);
@@ -95,6 +97,7 @@ export class EffectsManager {
       p.mesh.scale.setScalar(p.baseScale);
       p.mesh.material.color.setHex(cols[Math.floor(Math.random() * cols.length)]);
       p.mesh.material.opacity = 1;
+      p.userData  = { isShockwave: false, isStar: false };
     }
   }
 
@@ -104,7 +107,7 @@ export class EffectsManager {
 
     const count = slapLevel === 'critical' ? 14 : 8;
     for (let i = 0; i < count; i++) {
-      const p = this._getFree();
+      const p = this._pool.find(item => !item.active && item.mesh.geometry.type !== 'TorusGeometry');
       if (!p) break;
 
       const angle = (i / count) * Math.PI * 2;
@@ -121,6 +124,57 @@ export class EffectsManager {
       p.mesh.visible = true;
       p.mesh.material.color.setHex(0xffffff);
       p.mesh.material.opacity = 1;
+      p.userData  = { isShockwave: false, isStar: false };
+    }
+  }
+
+  /** Spawn flat expanding shockwave ring. */
+  spawnShockwave(position, slapLevel) {
+    if (!this.settings.particles) return;
+    const p = this._pool.find(item => !item.active && item.mesh.geometry.type === 'TorusGeometry');
+    if (!p) return;
+
+    p.mesh.position.copy(position);
+    p.mesh.position.z += 0.5; // shift forward slightly
+    p.mesh.rotation.set(0, 0, 0);
+    p.vel.set(0, 0, 0);
+    p.life = 0;
+    p.maxLife = 0.38;
+    p.baseScale = 1.0;
+    p.active = true;
+    p.mesh.visible = true;
+    p.mesh.scale.setScalar(0.1);
+    p.mesh.material.opacity = 1;
+    
+    const colors = { weak: 0xffff00, normal: 0xff6600, strong: 0xff0066, critical: 0x00ffff };
+    p.mesh.material.color.setHex(colors[slapLevel] ?? 0xffffff);
+    p.userData = { isShockwave: true, isStar: false };
+  }
+
+  /** Spawn floating gold stars. */
+  spawnStars(position, count) {
+    if (!this.settings.particles) return;
+    for (let i = 0; i < count; i++) {
+      const p = this._pool.find(item => !item.active && item.mesh.geometry.type === 'OctahedronGeometry');
+      if (!p) break;
+
+      p.mesh.position.copy(position);
+      p.mesh.position.x += (Math.random() - 0.5) * 1.5;
+      p.mesh.position.y += (Math.random() - 0.5) * 1.5;
+
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 4;
+      p.vel.set(Math.cos(angle) * speed, 3 + Math.random() * 3, (Math.random() - 0.5) * speed);
+
+      p.life = 0;
+      p.maxLife = 0.7 + Math.random() * 0.5;
+      p.baseScale = 0.5 + Math.random() * 0.4;
+      p.active = true;
+      p.mesh.visible = true;
+      p.mesh.scale.setScalar(p.baseScale);
+      p.mesh.material.color.setHex(0xffd700); // gold
+      p.mesh.material.opacity = 1;
+      p.userData = { isShockwave: false, isStar: true };
     }
   }
 
@@ -168,25 +222,31 @@ export class EffectsManager {
         return;
       }
 
-      // Physics
-      p.vel.y += GRAVITY * dt;
-      p.mesh.position.x += p.vel.x * dt;
-      p.mesh.position.y += p.vel.y * dt;
-      p.mesh.position.z += p.vel.z * dt;
-
-      // Shrink & fade
-      const sc = p.baseScale * (1 - t * 0.6);
-      if (p.baseScale === 1) {
-        // impact line — just fade
+      if (p.userData && p.userData.isShockwave) {
+        // Expand and fade shockwave flatly without gravity
+        const size = 0.2 + t * 9.5;
+        p.mesh.scale.set(size, size, size);
         p.mesh.material.opacity = 1 - t;
       } else {
-        p.mesh.scale.setScalar(Math.max(sc, 0.001));
-        p.mesh.material.opacity = Math.max(1 - t * 1.4, 0);
-      }
+        // Normal Physics
+        p.vel.y += GRAVITY * dt;
+        p.mesh.position.x += p.vel.x * dt;
+        p.mesh.position.y += p.vel.y * dt;
+        p.mesh.position.z += p.vel.z * dt;
 
-      // Tumble
-      p.mesh.rotation.x += dt * 4.5;
-      p.mesh.rotation.y += dt * 3.0;
+        // Shrink & fade
+        const sc = p.baseScale * (1 - t * 0.6);
+        if (p.baseScale === 1) {
+          p.mesh.material.opacity = 1 - t;
+        } else {
+          p.mesh.scale.setScalar(Math.max(sc, 0.001));
+          p.mesh.material.opacity = Math.max(1 - t * 1.4, 0);
+        }
+
+        // Tumble
+        p.mesh.rotation.x += dt * 4.5;
+        p.mesh.rotation.y += dt * 3.0;
+      }
     });
   }
 }
