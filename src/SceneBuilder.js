@@ -274,14 +274,6 @@ export class SceneBuilder {
     palm.castShadow = true;
     group.add(palm);
 
-    // Forearm (Limb) extending back off-screen
-    const armGeo = new THREE.CylinderGeometry(0.7, 0.9, 8.0, 16);
-    const arm = new THREE.Mesh(armGeo, M(skinCol));
-    arm.rotation.x = Math.PI / 2;
-    arm.position.set(0, -0.2, 4.0);
-    arm.castShadow = true;
-    group.add(arm);
-
     // Fingers: [offsetX, offsetZ, length, thickness, rotZ]
     const fingers = [
       [-0.90,  0.02, 0.88, 0.30, 0.55],   // thumb
