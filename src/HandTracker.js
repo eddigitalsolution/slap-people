@@ -230,6 +230,7 @@ export class HandTracker {
     // ---------- save previous RAW position for velocity ----------
     this._rawPrevX = this.palmCenter.x;
     this._rawPrevY = this.palmCenter.y;
+    const wasDetected = this.handDetected;
 
     // ---------- update raw palm center ----------
     if (this.mouseMode) {
@@ -242,6 +243,15 @@ export class HandTracker {
       this._detectHand();
     }
 
+    // Reset previous frame tracking positions if the hand was just detected to prevent false velocity spikes
+    if (!wasDetected && this.handDetected) {
+      this._rawPrevX = this.palmCenter.x;
+      this._rawPrevY = this.palmCenter.y;
+      this.smoothedPalm.x = this.palmCenter.x;
+      this.smoothedPalm.y = this.palmCenter.y;
+      this.smoothedHandDepth = this.handDepth;
+    }
+
     // ---------- smooth position for rendering ----------
     const lf = this._lerpFactor;
     this.smoothedPalm.x += (this.palmCenter.x - this.smoothedPalm.x) * lf;
@@ -250,9 +260,16 @@ export class HandTracker {
 
     // ---------- velocity from RAW delta (not smoothed) ----------
     if (deltaTime > 0) {
-      this.velocity.x     = (this.palmCenter.x - this._rawPrevX) / deltaTime;
-      this.velocity.y     = (this.palmCenter.y - this._rawPrevY) / deltaTime;
-      this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
+      // If the hand was just detected, force velocity to 0 for this frame
+      if (!wasDetected && this.handDetected) {
+        this.velocity.x = 0;
+        this.velocity.y = 0;
+        this.velocity.speed = 0;
+      } else {
+        this.velocity.x     = (this.palmCenter.x - this._rawPrevX) / deltaTime;
+        this.velocity.y     = (this.palmCenter.y - this._rawPrevY) / deltaTime;
+        this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
+      }
     }
 
     // ---------- update webcam badge ----------
