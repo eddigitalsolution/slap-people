@@ -385,36 +385,76 @@ export class SceneBuilder {
 
   // ── Per-frame updates ─────────────────────────────────
 
-  /** Move / animate the virtual hand toward the target world position. */
-  updateVirtualHand(pos, slapActive, slapProgress, isWebcam = false) {
+  /**
+   * Move and animate the virtual hand.
+   * @param {object} pos        – {x,y,z,tiltZ,handedness}
+   * @param {bool}   slapActive – slap animation running
+   * @param {number} progress   – eased [0..1] progress of slap
+   * @param {bool}   isWebcam   – true = use tracked Z depth, no Z lunge
+   * @param {string} direction  – 'horizontal'|'smash'|'uppercut'|'diagonal'
+   * @param {number} vx         – horizontal velocity for yaw direction
+   */
+  updateVirtualHand(pos, slapActive, progress, isWebcam = false, direction = 'horizontal', vx = 0) {
     if (!this.virtualHand) return;
 
-    this._handTarget.set(pos.x, pos.y, pos.z);
-    this.virtualHand.position.lerp(this._handTarget, 0.14);
+    const h  = this.virtualHand;
+    const lf = 0.16; // position lerp
 
-    // Slight roll based on horizontal velocity
-    this.virtualHand.rotation.z += (-(pos.tiltZ || 0) - this.virtualHand.rotation.z) * 0.12;
+    // ── Position ──────────────────────────────────────────
+    this._handTarget.set(pos.x, pos.y, pos.z);
+    h.position.lerp(this._handTarget, lf);
+
+    if (slapActive) {
+      // Both mouse and webcam mode get a Z lunge to make the slap feel punchy and connect with the boss
+      h.position.z = Math.max(0.5, pos.z - progress * 8.1);
+    }
 
     const isLeft = (pos.handedness === 'Left');
     const baseSc = 1.15;
 
+    // ── Scale (with handedness mirroring) ─────────────────
+    const sc = slapActive ? baseSc + progress * 0.5 : baseSc;
+    const targetScX = isLeft ? -sc : sc;
+    h.scale.x += (targetScX - h.scale.x) * 0.14;
+    h.scale.y += (sc - h.scale.y) * 0.14;
+    h.scale.z += (sc - h.scale.z) * 0.14;
+
+    // ── Rotation ──────────────────────────────────────────
+    // Base roll: lean in direction of horizontal movement
+    const rollTarget = -(pos.tiltZ || 0);
+    h.rotation.z += (rollTarget - h.rotation.z) * 0.12;
+
     if (slapActive) {
-      const sc = baseSc + slapProgress * 0.45;
-      if (isWebcam) {
-        // In webcam tracking mode, follow the hand's depth directly, only apply scale juice
-        this.virtualHand.scale.set(isLeft ? -sc : sc, sc, sc);
-      } else {
-        // Lunge forward in mouse mode: z goes from ~8.8 → ~0.7 at peak, then returns
-        const lungeZ = pos.z - slapProgress * 8.1;
-        this.virtualHand.position.z = lungeZ;
-        this.virtualHand.scale.set(isLeft ? -sc : sc, sc, sc);
+      // Direction-based pivot at slap peak
+      const P = progress; // 0→1→0
+
+      switch (direction) {
+        case 'smash':
+          // Pitch forward — hand swings DOWN onto boss
+          h.rotation.x += (Math.PI * 0.40 * P - h.rotation.x) * 0.22;
+          h.rotation.y += (0 - h.rotation.y) * 0.18;
+          break;
+
+        case 'uppercut':
+          // Pitch backward — hand swings UP
+          h.rotation.x += (-Math.PI * 0.35 * P - h.rotation.x) * 0.22;
+          h.rotation.y += (0 - h.rotation.y) * 0.18;
+          break;
+
+        case 'horizontal':
+        case 'diagonal': {
+          // Yaw in swing direction + z-roll
+          const yawDir = vx >= 0 ? 1 : -1;
+          const yawAmt = (direction === 'diagonal' ? 0.22 : 0.38) * P;
+          h.rotation.y += (yawDir * yawAmt - h.rotation.y) * 0.20;
+          h.rotation.x += (0 - h.rotation.x) * 0.18;
+          break;
+        }
       }
     } else {
-      // Lerp back to base scale with mirroring
-      const targetX = isLeft ? -baseSc : baseSc;
-      this.virtualHand.scale.x += (targetX - this.virtualHand.scale.x) * 0.12;
-      this.virtualHand.scale.y += (baseSc - this.virtualHand.scale.y) * 0.12;
-      this.virtualHand.scale.z += (baseSc - this.virtualHand.scale.z) * 0.12;
+      // Smoothly return all rotations to neutral
+      h.rotation.x += (0 - h.rotation.x) * 0.10;
+      h.rotation.y += (0 - h.rotation.y) * 0.10;
     }
   }
 

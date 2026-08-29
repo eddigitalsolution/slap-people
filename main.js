@@ -56,7 +56,7 @@ let timerRunning = false;
 // Slap animation state (virtual hand lunges toward boss)
 // ═══════════════════════════════════════════════════════
 
-const slapAnim = { active: false, timer: 0, duration: 0.55 };
+const slapAnim = { active: false, timer: 0, duration: 0.45, direction: 'horizontal', vx: 0 };
 
 // ═══════════════════════════════════════════════════════
 // Bootstrap
@@ -231,7 +231,9 @@ function startGame() {
   ui.showHUD(true);
   scene3d.hideMenuHands();
   scene3d.showVirtualHand();
-  slapDetect.lastSlapTime = elapsed + 0.8; // cooldown grace period
+  slapDetect.reset();                        // clear any stale gesture phase
+  slapDetect.lastSlapTime = elapsed + 0.8;  // grace period
+  slapAnim.active = false;
   spawnBoss(0);
 }
 
@@ -243,7 +245,9 @@ function nextBoss() {
   gameState.setState('PLAYING');
   ui.hideAllScreens();
   ui.showHUD(true);
-  slapDetect.lastSlapTime = elapsed + 0.8; // cooldown grace period
+  slapDetect.reset();
+  slapDetect.lastSlapTime = elapsed + 0.8;
+  slapAnim.active = false;
   spawnBoss(next);
 }
 

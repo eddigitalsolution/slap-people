@@ -1,134 +1,114 @@
 /**
- * HandTracker.js  (v2 – fixed CDN, raw velocity, click-to-slap)
+ * HandTracker.js  (v3 — Gesture-Grade Tracking)
  *
- * Changes vs v1:
- *  • MediaPipe loaded from esm.sh (reliable ESM CDN) + unpkg fallback
- *  • velocity calculated from RAW palmCenter delta (not the lerped position)
- *    → slap thresholds are now reachable with normal hand movement
- *  • lerpFactor raised to 0.30 for snappier visual tracking
- *  • Time-based detection throttle (33 ms) instead of currentTime compare
- *  • Mouse-click / tap fires an instant "strong" slap event via gameState
- *  • Visible status text in the webcam badge
+ * Key improvements:
+ *  • Velocity uses a 3-frame rolling average to smooth detection jitter
+ *    while still capturing genuine fast swings
+ *  • `handOpen` now also exposes `handClosed` (fist) for future use
+ *  • Depth (Z) tracking maps physical palm size to world Z
+ *  • Entrance guard: zeroes velocity on first N detection frames
+ *  • Noise deadzone 0.10 units/sec — sub-threshold = camera static
+ *  • `getWorldPosition()` returns live depth-based Z in webcam mode
+ *  • Skeleton overlay drawn per detection frame with connection lines + joints
  */
 
 export class HandTracker {
   constructor() {
-    this._landmarker       = null;
-    this.video             = document.getElementById('webcam-video');
-    this._lastDetectionMs  = 0;   // time-based throttle (ms)
+    this._landmarker      = null;
+    this.video            = document.getElementById('webcam-video');
+    this._lastDetectionMs = 0;
 
     this.isReady      = false;
     this.isRunning    = false;
     this.mouseMode    = false;
 
-    // Raw landmark-average position (0-1, updated every detected frame)
+    // Normalised palm position [0-1] — raw (updated per detection) and smoothed (for rendering)
     this.palmCenter   = { x: 0.5, y: 0.5 };
-    // Smoothed position used for rendering the virtual hand
     this.smoothedPalm = { x: 0.5, y: 0.5 };
 
-    // Hand depth (0 = far away, 1 = close to camera)
-    this.handDepth    = 0.5;
+    // Physical depth [0=far … 1=close]
+    this.handDepth         = 0.5;
     this.smoothedHandDepth = 0.5;
 
-    this.canvas = document.getElementById('webcam-canvas');
-    this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
+    // Velocity — smoothed over last N detection frames
+    this.velocity = { x: 0, y: 0, speed: 0 };
+    this._velHistory = [];          // {vx, vy} ring buffer
+    this._VEL_HISTORY_LEN = 3;     // frames to average
 
-    // Velocity is calculated from RAW palmCenter so lerp does NOT dampen it
-    this._rawPrevX = 0.5;
-    this._rawPrevY = 0.5;
-
-    this.velocity     = { x: 0, y: 0, speed: 0 };
+    // Hand state
     this.handOpen     = false;
+    this.handClosed   = false;
     this.handDetected = false;
-    this.handedness   = 'Right'; // 'Left' or 'Right'
+    this.handedness   = 'Right';
 
-    this._lerpFactor = 0.30;   // higher = snappier visual tracking
+    this._lerpFactor  = 0.35;      // visual smoothing (higher = snappier)
+    this._noiseFloor  = 0.10;      // units/sec below which velocity = 0
 
-    // Mouse / touch tracking
-    this._mousePos    = { x: 0.5, y: 0.5 };
-    this._prevMouseX  = 0.5;
-    this._prevMouseY  = 0.5;
+    // Overlay canvas
+    this.canvas = document.getElementById('webcam-canvas');
+    this.ctx    = this.canvas ? this.canvas.getContext('2d') : null;
 
-    // External callback so main.js can inject a "force slap" (click/tap)
-    this.onForceSlap  = null;
+    // Mouse / touch state
+    this._mousePos = { x: 0.5, y: 0.5 };
 
-    // Cache object to prevent frame-rate allocation overhead
-    this._cachedWorldPos = { x: 0, y: 0, z: 0, tiltZ: 0 };
+    // Click / tap → external force-slap callback
+    this.onForceSlap = null;
+
+    // Reusable object — avoids per-frame GC allocation
+    this._cachedWorldPos = { x: 0, y: 0, z: 0, tiltZ: 0, handedness: 'Right' };
   }
 
-  // ── Initialisation ─────────────────────────────────────
+  // ── Init ───────────────────────────────────────────────
 
   async init(onProgress) {
     onProgress?.('Loading MediaPipe…');
 
-    let loaded = false;
-
-    // Try ESM CDNs in order until one works
     const candidates = [
-      // esm.sh always serves proper ESM with correct MIME
       'https://esm.sh/@mediapipe/tasks-vision@0.10.14',
-      // jsDelivr +esm wrapper (auto-converts to ESM)
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm',
-      // unpkg direct bundle
       'https://unpkg.com/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs',
     ];
-
     const wasmBases = [
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm',
       'https://unpkg.com/@mediapipe/tasks-vision@0.10.14/wasm',
     ];
+    const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-    const MODEL =
-      'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-
+    let loaded = false;
     for (const cdnUrl of candidates) {
       if (loaded) break;
       try {
-        onProgress?.(`Trying MediaPipe CDN…`);
+        onProgress?.('Trying MediaPipe CDN…');
         const mp = await import(/* @vite-ignore */ cdnUrl);
         const { HandLandmarker, FilesetResolver } = mp;
-
-        if (!HandLandmarker || !FilesetResolver) {
-          throw new Error('Expected exports missing');
-        }
+        if (!HandLandmarker || !FilesetResolver) throw new Error('Missing exports');
 
         for (const wasmBase of wasmBases) {
+          if (loaded) break;
           try {
             onProgress?.('Resolving WASM…');
             const vision = await FilesetResolver.forVisionTasks(wasmBase);
-
             onProgress?.('Creating landmarker…');
-
-            // Try GPU first, fall back to CPU
             for (const delegate of ['GPU', 'CPU']) {
               try {
                 this._landmarker = await HandLandmarker.createFromOptions(vision, {
                   baseOptions: { modelAssetPath: MODEL, delegate },
                   runningMode: 'VIDEO',
-                  numHands:    1,
+                  numHands: 1,
                 });
                 onProgress?.(`Hand tracking ready (${delegate})`);
-                console.log(`[HandTracker] ✅ ${cdnUrl} + delegate=${delegate}`);
                 loaded = true;
                 this.isReady = true;
                 break;
-              } catch (delegateErr) {
-                console.warn(`[HandTracker] delegate ${delegate} failed:`, delegateErr);
-              }
+              } catch { /* try next */ }
             }
-            if (loaded) break;
-          } catch (wasmErr) {
-            console.warn('[HandTracker] WASM base failed:', wasmBase, wasmErr);
-          }
+          } catch { /* try next wasm base */ }
         }
-      } catch (cdnErr) {
-        console.warn('[HandTracker] CDN failed:', cdnUrl, cdnErr);
-      }
+      } catch { /* try next CDN */ }
     }
 
     if (!loaded) {
-      console.warn('[HandTracker] All CDNs failed — switching to mouse mode');
-      onProgress?.('Hand tracking unavailable — using mouse mode');
+      onProgress?.('Hand tracking unavailable — mouse mode');
       this.enableMouseMode();
     }
 
@@ -139,17 +119,8 @@ export class HandTracker {
 
   async startWebcam() {
     if (this.mouseMode) return true;
-    if (!this.isReady) {
-      console.warn('[HandTracker] Not ready — mouse mode');
-      this.enableMouseMode();
-      return false;
-    }
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      console.warn('[HandTracker] mediaDevices API not supported — mouse mode fallback');
-      this.enableMouseMode();
-      return false;
-    }
+    if (!this.isReady) { this.enableMouseMode(); return false; }
+    if (!navigator.mediaDevices?.getUserMedia) { this.enableMouseMode(); return false; }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -160,9 +131,8 @@ export class HandTracker {
       await this.video.play();
       this.isRunning = true;
 
-      // Re-grab canvas and context in case DOM reloaded
       this.canvas = document.getElementById('webcam-canvas');
-      this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
+      this.ctx    = this.canvas ? this.canvas.getContext('2d') : null;
 
       const wc = document.getElementById('webcam-container');
       if (wc) wc.style.display = 'block';
@@ -176,14 +146,12 @@ export class HandTracker {
   }
 
   stopWebcam() {
-    if (this.video?.srcObject) {
-      this.video.srcObject.getTracks().forEach(t => t.stop());
-      this.video.srcObject = null;
-    }
+    this.video?.srcObject?.getTracks().forEach(t => t.stop());
+    if (this.video) this.video.srcObject = null;
     this.isRunning = false;
   }
 
-  // ── Mouse / touch fallback ─────────────────────────────
+  // ── Mouse fallback ─────────────────────────────────────
 
   enableMouseMode() {
     this.mouseMode    = true;
@@ -191,33 +159,28 @@ export class HandTracker {
     this.isRunning    = true;
     this.handDetected = true;
     this.handOpen     = true;
-
     const wc = document.getElementById('webcam-container');
     if (wc) wc.style.display = 'none';
-    console.log('[HandTracker] 🖱️  Mouse mode active — click canvas to slap');
   }
 
   _attachInputListeners() {
     const canvas = document.getElementById('game-canvas');
     if (!canvas) return;
 
-    // Track mouse position
     canvas.addEventListener('mousemove', e => {
       const r = canvas.getBoundingClientRect();
       this._mousePos.x = (e.clientX - r.left) / r.width;
       this._mousePos.y = (e.clientY - r.top)  / r.height;
     });
 
-    // Touch position
     canvas.addEventListener('touchmove', e => {
       e.preventDefault();
-      const r     = canvas.getBoundingClientRect();
-      const t     = e.touches[0];
+      const r = canvas.getBoundingClientRect();
+      const t = e.touches[0];
       this._mousePos.x = (t.clientX - r.left) / r.width;
       this._mousePos.y = (t.clientY - r.top)  / r.height;
     }, { passive: false });
 
-    // Click / tap → force slap
     canvas.addEventListener('pointerdown', () => {
       if (this.onForceSlap) this.onForceSlap();
     });
@@ -229,54 +192,49 @@ export class HandTracker {
     if (!this.isReady || !this.isRunning) return;
 
     if (this.mouseMode) {
-      // ---------- save previous mouse position for velocity ----------
-      this._rawPrevX = this.palmCenter.x;
-      this._rawPrevY = this.palmCenter.y;
+      const prevX = this.palmCenter.x;
+      const prevY = this.palmCenter.y;
       this.palmCenter.x = this._mousePos.x;
       this.palmCenter.y = this._mousePos.y;
       this.handDetected = true;
       this.handOpen     = true;
+      this.handClosed   = false;
       this.handDepth    = 0.5;
 
       if (deltaTime > 0) {
-        this.velocity.x     = (this.palmCenter.x - this._rawPrevX) / deltaTime;
-        this.velocity.y     = (this.palmCenter.y - this._rawPrevY) / deltaTime;
-        this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
+        const vx = (this.palmCenter.x - prevX) / deltaTime;
+        const vy = (this.palmCenter.y - prevY) / deltaTime;
+        this.velocity.x     = vx;
+        this.velocity.y     = vy;
+        this.velocity.speed = Math.hypot(vx, vy);
       }
     } else {
       this._detectHand();
     }
 
-    // ---------- smooth position for rendering ----------
+    // Smooth visual position
     const lf = this._lerpFactor;
     this.smoothedPalm.x += (this.palmCenter.x - this.smoothedPalm.x) * lf;
     this.smoothedPalm.y += (this.palmCenter.y - this.smoothedPalm.y) * lf;
     this.smoothedHandDepth += (this.handDepth - this.smoothedHandDepth) * lf;
 
-    // ---------- update webcam badge ----------
+    // Update HUD badge
     const ind = document.getElementById('hand-indicator');
     if (ind) {
-      if (this.mouseMode) {
-        ind.textContent = '🖱️';
-      } else if (this.handDetected) {
-        ind.textContent = '✋';
-        ind.style.opacity = '1';
-      } else {
-        ind.textContent = '❌';
-        ind.style.opacity = '0.5';
-      }
+      if (this.mouseMode)       ind.textContent = '🖱️';
+      else if (this.handDetected) { ind.textContent = this.handOpen ? '✋' : '✊'; ind.style.opacity = '1'; }
+      else                        { ind.textContent = '❌'; ind.style.opacity = '0.5'; }
     }
   }
 
-  // ── MediaPipe detection (webcam mode only) ─────────────
+  // ── MediaPipe detection ────────────────────────────────
 
   _detectHand() {
     if (!this._landmarker || !this.video || this.video.readyState < 2) return;
 
-    // Throttle to ~30 fps to reduce CPU load
     const now = performance.now();
-    if (now - this._lastDetectionMs < 33) return;
-    const timeDelta = (now - this._lastDetectionMs) / 1000; // in seconds
+    if (now - this._lastDetectionMs < 33) return;         // throttle ~30 fps
+    const timeDelta = (now - this._lastDetectionMs) / 1000;
     this._lastDetectionMs = now;
 
     try {
@@ -287,142 +245,159 @@ export class HandTracker {
         this.handDetected = true;
         const lm = results.landmarks[0];
 
-        if (results.handedness && results.handedness.length > 0) {
-          // MediaPipe category name can be 'Left' or 'Right'
+        // Handedness
+        if (results.handedness?.length > 0) {
           this.handedness = results.handedness[0][0].categoryName;
         }
 
-        // Open-hand detection: majority of fingertips above their base knuckle
+        // Open / closed hand
         const tips  = [8, 12, 16, 20];
         const bases = [5,  9, 13, 17];
         let openCount = 0;
         tips.forEach((t, i) => { if (lm[t].y < lm[bases[i]].y) openCount++; });
-        this.handOpen = openCount >= 3;
+        this.handOpen   = openCount >= 3;
+        this.handClosed = openCount <= 1;
 
-        // Palm centre: wrist + 4 knuckle bases
+        // Palm centre (wrist + 4 knuckle bases)
         const palmIdx = [0, 5, 9, 13, 17];
         let px = 0, py = 0;
         palmIdx.forEach(i => { px += lm[i].x; py += lm[i].y; });
-        const nextPalmX = px / palmIdx.length;
-        const nextPalmY = py / palmIdx.length;
+        const nextX = px / palmIdx.length;
+        const nextY = py / palmIdx.length;
 
-        // Calculate Hand Depth (distance between wrist landmark 0 and middle finger base landmark 9)
-        const dx = lm[0].x - lm[9].x;
-        const dy = lm[0].y - lm[9].y;
-        const dz = lm[0].z - lm[9].z;
-        const currentDist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        // Map normal palm distance [0.09, 0.26] to depth [0.0, 1.0]
-        const rawDepth = Math.max(0, Math.min(1, (currentDist - 0.09) / 0.17));
-        this.handDepth = rawDepth;
+        // Depth: wrist(0) → middle-knuckle(9) distance
+        const ddx = lm[0].x - lm[9].x;
+        const ddy = lm[0].y - lm[9].y;
+        const ddz = lm[0].z - lm[9].z;
+        const dist = Math.sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+        this.handDepth = Math.max(0, Math.min(1, (dist - 0.09) / 0.17));
 
         if (!wasDetected) {
-          // Reset coordinate defaults instantly to avoid motion spikes
-          this.palmCenter.x = nextPalmX;
-          this.palmCenter.y = nextPalmY;
-          this.smoothedPalm.x = nextPalmX;
-          this.smoothedPalm.y = nextPalmY;
-          this.smoothedHandDepth = rawDepth;
-
-          this.velocity.x = 0;
-          this.velocity.y = 0;
-          this.velocity.speed = 0;
+          // Snap position immediately — no history from default (0.5, 0.5)
+          this.palmCenter.x = nextX;
+          this.palmCenter.y = nextY;
+          this.smoothedPalm.x = nextX;
+          this.smoothedPalm.y = nextY;
+          this.smoothedHandDepth = this.handDepth;
+          this._velHistory = [];
+          this.velocity = { x: 0, y: 0, speed: 0 };
         } else {
-          // Calculate speed based on raw coordinate delta / physical detection interval (timeDelta)
+          // Raw velocity for this detection frame
           if (timeDelta > 0) {
-            const rawVx = (nextPalmX - this.palmCenter.x) / timeDelta;
-            const rawVy = (nextPalmY - this.palmCenter.y) / timeDelta;
+            const rawVx = (nextX - this.palmCenter.x) / timeDelta;
+            const rawVy = (nextY - this.palmCenter.y) / timeDelta;
             const rawSpeed = Math.hypot(rawVx, rawVy);
 
-            if (rawSpeed < 0.12) {
-              this.velocity.x = 0;
-              this.velocity.y = 0;
-              this.velocity.speed = 0;
+            if (rawSpeed < this._noiseFloor) {
+              // Below noise floor — this frame contributes zero to the buffer
+              this._velHistory.push({ vx: 0, vy: 0 });
             } else {
-              this.velocity.x     = rawVx;
-              this.velocity.y     = rawVy;
-              this.velocity.speed = rawSpeed;
+              this._velHistory.push({ vx: rawVx, vy: rawVy });
+            }
+
+            // Keep buffer at fixed length
+            if (this._velHistory.length > this._VEL_HISTORY_LEN) {
+              this._velHistory.shift();
+            }
+
+            // Average the buffer → smooth but responsive velocity
+            if (this._velHistory.length > 0) {
+              let sumVx = 0, sumVy = 0;
+              this._velHistory.forEach(v => { sumVx += v.vx; sumVy += v.vy; });
+              const n = this._velHistory.length;
+              this.velocity.x     = sumVx / n;
+              this.velocity.y     = sumVy / n;
+              this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
             }
           }
-          this.palmCenter.x = nextPalmX;
-          this.palmCenter.y = nextPalmY;
+          this.palmCenter.x = nextX;
+          this.palmCenter.y = nextY;
         }
 
-        // Draw overlay skeleton representation
         this._drawSkeleton(lm);
+        this._updateBadge(this.handOpen ? '✋ OPEN' : '✊ FIST');
 
-        this._updateBadge('✋ DETECTED');
       } else {
         this.handDetected = false;
-        // Clear skeleton canvas
+        this._velHistory  = [];
+        this.velocity     = { x: 0, y: 0, speed: 0 };
         if (this.ctx && this.canvas) {
           this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         }
         this._updateBadge('🔍 SCANNING…');
       }
     } catch (e) {
-      // silently skip bad frames
+      // Skip bad frames silently
     }
   }
 
+  // ── Skeleton overlay ───────────────────────────────────
+
   _drawSkeleton(landmarks) {
     if (!this.canvas || !this.ctx) return;
-    
-    // Set canvas dimensions to match actual video source size
-    this.canvas.width = this.video.videoWidth || 640;
+
+    this.canvas.width  = this.video.videoWidth  || 640;
     this.canvas.height = this.video.videoHeight || 480;
 
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
-
     ctx.clearRect(0, 0, w, h);
 
-    // Finger connections pairs
+    // Speed colour — cyan when still, yellow→red when fast
+    const spd = Math.min(1, this.velocity.speed / 1.5);
+    const r = Math.round(spd * 255);
+    const g = Math.round((1 - spd) * 229);
+    const lineColor = `rgb(${r}, ${g}, 255)`;
+
     const connections = [
-      // Thumb
-      [0, 1], [1, 2], [2, 3], [3, 4],
-      // Index
-      [0, 5], [5, 6], [6, 7], [7, 8],
-      // Middle
-      [0, 9], [9, 10], [10, 11], [11, 12],
-      // Ring
-      [0, 13], [13, 14], [14, 15], [15, 16],
-      // Pinky
-      [0, 17], [17, 18], [18, 19], [19, 20],
-      // Palm base
-      [5, 9], [9, 13], [13, 17]
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [0,9],[9,10],[10,11],[11,12],
+      [0,13],[13,14],[14,15],[15,16],
+      [0,17],[17,18],[18,19],[19,20],
+      [5,9],[9,13],[13,17],
     ];
 
-    // Connection lines (neon cyan)
-    ctx.strokeStyle = '#00e5ff';
-    ctx.lineWidth = 5;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth   = 4;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
 
-    connections.forEach(([start, end]) => {
-      const p1 = landmarks[start];
-      const p2 = landmarks[end];
-      if (p1 && p2) {
-        ctx.beginPath();
-        ctx.moveTo(p1.x * w, p1.y * h);
-        ctx.lineTo(p2.x * w, p2.y * h);
-        ctx.stroke();
-      }
+    connections.forEach(([a, b]) => {
+      const p1 = landmarks[a], p2 = landmarks[b];
+      if (!p1 || !p2) return;
+      ctx.beginPath();
+      ctx.moveTo(p1.x * w, p1.y * h);
+      ctx.lineTo(p2.x * w, p2.y * h);
+      ctx.stroke();
     });
 
-    // Landmark joints (neon pink + white core)
-    landmarks.forEach(lm => {
-      ctx.fillStyle = '#ff0099';
+    // Joints
+    landmarks.forEach((lm, idx) => {
+      const isTip = [4, 8, 12, 16, 20].includes(idx);
+      const radius = isTip ? 9 : 6;
+      const color  = isTip ? '#ff0099' : '#00e5ff';
+
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(lm.x * w, lm.y * h, 7, 0, 2 * Math.PI);
+      ctx.arc(lm.x * w, lm.y * h, radius, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
+      ctx.lineWidth   = 1.5;
       ctx.beginPath();
-      ctx.arc(lm.x * w, lm.y * h, 7, 0, 2 * Math.PI);
+      ctx.arc(lm.x * w, lm.y * h, radius, 0, Math.PI * 2);
       ctx.stroke();
     });
+
+    // Draw speed bar at top of canvas
+    const barW = Math.min(1, this.velocity.speed / 1.5) * w;
+    const barColor = spd > 0.7 ? '#ff4400' : spd > 0.4 ? '#ffaa00' : '#00ff88';
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, w, 12);
+    ctx.fillStyle = barColor;
+    ctx.fillRect(0, 0, barW, 12);
   }
 
   _updateBadge(text) {
@@ -430,21 +405,18 @@ export class HandTracker {
     if (lbl) lbl.textContent = text;
   }
 
-  // ── World-space conversion ────────────────────────────
+  // ── World-space coordinate conversion ─────────────────
 
-  /**
-   * Map normalised palm position to Three.js world XY at given Z depth.
-   * Mirrors X axis so movement feels natural.
-   */
   getWorldPosition(baseZ = 8.8) {
     let zPos = baseZ;
     if (!this.mouseMode) {
-      // Map smoothedHandDepth [0.0, 1.0] to dynamic Z range [8.8, 1.0]
+      // Depth maps [0=far, 1=close] → Z [8.8 … 1.0]
       zPos = baseZ - this.smoothedHandDepth * 7.8;
     }
-    this._cachedWorldPos.x = (1 - this.smoothedPalm.x) * 8 - 4;
-    this._cachedWorldPos.y = (1 - this.smoothedPalm.y) * 5 - 0.5;
-    this._cachedWorldPos.z = zPos;
+    this._cachedWorldPos.x          = (1 - this.smoothedPalm.x) * 8 - 4;
+    this._cachedWorldPos.y          = (1 - this.smoothedPalm.y) * 5 - 0.5;
+    this._cachedWorldPos.z          = zPos;
+    this._cachedWorldPos.handedness = this.handedness;
     return this._cachedWorldPos;
   }
 }
