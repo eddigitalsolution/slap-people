@@ -26,6 +26,13 @@ export class HandTracker {
     // Smoothed position used for rendering the virtual hand
     this.smoothedPalm = { x: 0.5, y: 0.5 };
 
+    // Hand depth (0 = far away, 1 = close to camera)
+    this.handDepth    = 0.5;
+    this.smoothedHandDepth = 0.5;
+
+    this.canvas = document.getElementById('webcam-canvas');
+    this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
+
     // Velocity is calculated from RAW palmCenter so lerp does NOT dampen it
     this._rawPrevX = 0.5;
     this._rawPrevY = 0.5;
@@ -152,6 +159,10 @@ export class HandTracker {
       await this.video.play();
       this.isRunning = true;
 
+      // Re-grab canvas and context in case DOM reloaded
+      this.canvas = document.getElementById('webcam-canvas');
+      this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
+
       const wc = document.getElementById('webcam-container');
       if (wc) wc.style.display = 'block';
       this._updateBadge('🔍 SCANNING…');
@@ -226,6 +237,7 @@ export class HandTracker {
       this.palmCenter.y = this._mousePos.y;
       this.handDetected = true;
       this.handOpen     = true;
+      this.handDepth    = 0.5;
     } else {
       this._detectHand();
     }
@@ -234,6 +246,7 @@ export class HandTracker {
     const lf = this._lerpFactor;
     this.smoothedPalm.x += (this.palmCenter.x - this.smoothedPalm.x) * lf;
     this.smoothedPalm.y += (this.palmCenter.y - this.smoothedPalm.y) * lf;
+    this.smoothedHandDepth += (this.handDepth - this.smoothedHandDepth) * lf;
 
     // ---------- velocity from RAW delta (not smoothed) ----------
     if (deltaTime > 0) {
@@ -288,14 +301,91 @@ export class HandTracker {
         tips.forEach((t, i) => { if (lm[t].y < lm[bases[i]].y) openCount++; });
         this.handOpen = openCount >= 3;
 
+        // Calculate Hand Depth (distance between wrist landmark 0 and middle finger base landmark 9)
+        const dx = lm[0].x - lm[9].x;
+        const dy = lm[0].y - lm[9].y;
+        const dz = lm[0].z - lm[9].z;
+        const currentDist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        // Map normal palm distance [0.09, 0.26] to depth [0.0, 1.0]
+        const rawDepth = Math.max(0, Math.min(1, (currentDist - 0.09) / 0.17));
+        this.handDepth = rawDepth;
+
+        // Draw overlay skeleton representation
+        this._drawSkeleton(lm);
+
         this._updateBadge('✋ DETECTED');
       } else {
         this.handDetected = false;
+        // Clear skeleton canvas
+        if (this.ctx && this.canvas) {
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
         this._updateBadge('🔍 SCANNING…');
       }
     } catch (e) {
       // silently skip bad frames
     }
+  }
+
+  _drawSkeleton(landmarks) {
+    if (!this.canvas || !this.ctx) return;
+    
+    // Set canvas dimensions to match actual video source size
+    this.canvas.width = this.video.videoWidth || 640;
+    this.canvas.height = this.video.videoHeight || 480;
+
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Finger connections pairs
+    const connections = [
+      // Thumb
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      // Index
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      // Middle
+      [0, 9], [9, 10], [10, 11], [11, 12],
+      // Ring
+      [0, 13], [13, 14], [14, 15], [15, 16],
+      // Pinky
+      [0, 17], [17, 18], [18, 19], [19, 20],
+      // Palm base
+      [5, 9], [9, 13], [13, 17]
+    ];
+
+    // Connection lines (neon cyan)
+    ctx.strokeStyle = '#00e5ff';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    connections.forEach(([start, end]) => {
+      const p1 = landmarks[start];
+      const p2 = landmarks[end];
+      if (p1 && p2) {
+        ctx.beginPath();
+        ctx.moveTo(p1.x * w, p1.y * h);
+        ctx.lineTo(p2.x * w, p2.y * h);
+        ctx.stroke();
+      }
+    });
+
+    // Landmark joints (neon pink + white core)
+    landmarks.forEach(lm => {
+      ctx.fillStyle = '#ff0099';
+      ctx.beginPath();
+      ctx.arc(lm.x * w, lm.y * h, 7, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(lm.x * w, lm.y * h, 7, 0, 2 * Math.PI);
+      ctx.stroke();
+    });
   }
 
   _updateBadge(text) {
@@ -309,10 +399,15 @@ export class HandTracker {
    * Map normalised palm position to Three.js world XY at given Z depth.
    * Mirrors X axis so movement feels natural.
    */
-  getWorldPosition(z = 7) {
+  getWorldPosition(baseZ = 8.8) {
+    let zPos = baseZ;
+    if (!this.mouseMode) {
+      // Map smoothedHandDepth [0.0, 1.0] to dynamic Z range [8.8, 1.0]
+      zPos = baseZ - this.smoothedHandDepth * 7.8;
+    }
     this._cachedWorldPos.x = (1 - this.smoothedPalm.x) * 8 - 4;
     this._cachedWorldPos.y = (1 - this.smoothedPalm.y) * 5 - 0.5;
-    this._cachedWorldPos.z = z;
+    this._cachedWorldPos.z = zPos;
     return this._cachedWorldPos;
   }
 }

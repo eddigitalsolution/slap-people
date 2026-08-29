@@ -378,7 +378,7 @@ export class SceneBuilder {
   // ── Per-frame updates ─────────────────────────────────
 
   /** Move / animate the virtual hand toward the target world position. */
-  updateVirtualHand(pos, slapActive, slapProgress) {
+  updateVirtualHand(pos, slapActive, slapProgress, isWebcam = false) {
     if (!this.virtualHand) return;
 
     this._handTarget.set(pos.x, pos.y, pos.z);
@@ -388,12 +388,18 @@ export class SceneBuilder {
     this.virtualHand.rotation.z += (-(pos.tiltZ || 0) - this.virtualHand.rotation.z) * 0.12;
 
     if (slapActive) {
-      // Lunge forward: z goes from ~8.8 → ~0.7 at peak, then returns
-      const lungeZ = pos.z - slapProgress * 8.1;
-      this.virtualHand.position.z = lungeZ;
+      if (isWebcam) {
+        // In webcam tracking mode, follow the hand's depth directly, only apply scale juice
+        const sc = 1.15 + slapProgress * 0.45;
+        this.virtualHand.scale.setScalar(sc);
+      } else {
+        // Lunge forward in mouse mode: z goes from ~8.8 → ~0.7 at peak, then returns
+        const lungeZ = pos.z - slapProgress * 8.1;
+        this.virtualHand.position.z = lungeZ;
 
-      const sc = 1.15 + slapProgress * 0.45;
-      this.virtualHand.scale.setScalar(sc);
+        const sc = 1.15 + slapProgress * 0.45;
+        this.virtualHand.scale.setScalar(sc);
+      }
     } else {
       this.virtualHand.scale.lerp(this._handScaleTarget, 0.12);
     }

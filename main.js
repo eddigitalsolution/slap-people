@@ -452,10 +452,10 @@ function loop() {
       const t = slapAnim.timer / slapAnim.duration;
       // Ease: quick forward (0→0.3 of duration) then ease back
       const progress = t < 0.28 ? t / 0.28 : 1 - (t - 0.28) / 0.72;
-      scene3d.updateVirtualHand(wPos, true, Math.max(0, progress));
+      scene3d.updateVirtualHand(wPos, true, Math.max(0, progress), !hand.mouseMode);
       if (slapAnim.timer >= slapAnim.duration) slapAnim.active = false;
     } else {
-      scene3d.updateVirtualHand(wPos, false, 0);
+      scene3d.updateVirtualHand(wPos, false, 0, !hand.mouseMode);
     }
   }
 
