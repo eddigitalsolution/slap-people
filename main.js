@@ -308,6 +308,8 @@ gameState.on('slap', slapEvent => {
   // Virtual hand lunge animation
   slapAnim.active = true;
   slapAnim.timer  = 0;
+  slapAnim.direction = slapEvent.direction || 'horizontal';
+  slapAnim.vx = slapEvent.velocity ? slapEvent.velocity.x : 0;
 
   // Audio
   ({ weak: audio.playWeakSlap,   normal: audio.playNormalSlap,
@@ -455,10 +457,10 @@ function loop() {
       const t = slapAnim.timer / slapAnim.duration;
       // Ease: quick forward (0→0.3 of duration) then ease back
       const progress = t < 0.28 ? t / 0.28 : 1 - (t - 0.28) / 0.72;
-      scene3d.updateVirtualHand(wPos, true, Math.max(0, progress), !hand.mouseMode);
+      scene3d.updateVirtualHand(wPos, true, Math.max(0, progress), !hand.mouseMode, slapAnim.direction, slapAnim.vx);
       if (slapAnim.timer >= slapAnim.duration) slapAnim.active = false;
     } else {
-      scene3d.updateVirtualHand(wPos, false, 0, !hand.mouseMode);
+      scene3d.updateVirtualHand(wPos, false, 0, !hand.mouseMode, 'horizontal', 0);
     }
   }
 
