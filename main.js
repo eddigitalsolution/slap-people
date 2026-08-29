@@ -448,6 +448,7 @@ function loop() {
     // ── Virtual hand position & slap lunge ──────────
     const wPos = hand.getWorldPosition(8.8);
     wPos.tiltZ = -hand.velocity.x * 2.8;
+    wPos.handedness = hand.handedness;
 
     if (slapAnim.active) {
       slapAnim.timer += dt;

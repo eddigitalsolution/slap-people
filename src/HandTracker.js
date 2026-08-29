@@ -40,6 +40,7 @@ export class HandTracker {
     this.velocity     = { x: 0, y: 0, speed: 0 };
     this.handOpen     = false;
     this.handDetected = false;
+    this.handedness   = 'Right'; // 'Left' or 'Right'
 
     this._lerpFactor = 0.30;   // higher = snappier visual tracking
 
@@ -285,6 +286,11 @@ export class HandTracker {
         const wasDetected = this.handDetected;
         this.handDetected = true;
         const lm = results.landmarks[0];
+
+        if (results.handedness && results.handedness.length > 0) {
+          // MediaPipe category name can be 'Left' or 'Right'
+          this.handedness = results.handedness[0][0].categoryName;
+        }
 
         // Open-hand detection: majority of fingertips above their base knuckle
         const tips  = [8, 12, 16, 20];

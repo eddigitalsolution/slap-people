@@ -274,6 +274,14 @@ export class SceneBuilder {
     palm.castShadow = true;
     group.add(palm);
 
+    // Forearm (Limb) extending back off-screen
+    const armGeo = new THREE.CylinderGeometry(0.7, 0.9, 8.0, 16);
+    const arm = new THREE.Mesh(armGeo, M(skinCol));
+    arm.rotation.x = Math.PI / 2;
+    arm.position.set(0, -0.2, 4.0);
+    arm.castShadow = true;
+    group.add(arm);
+
     // Fingers: [offsetX, offsetZ, length, thickness, rotZ]
     const fingers = [
       [-0.90,  0.02, 0.88, 0.30, 0.55],   // thumb
@@ -387,21 +395,26 @@ export class SceneBuilder {
     // Slight roll based on horizontal velocity
     this.virtualHand.rotation.z += (-(pos.tiltZ || 0) - this.virtualHand.rotation.z) * 0.12;
 
+    const isLeft = (pos.handedness === 'Left');
+    const baseSc = 1.15;
+
     if (slapActive) {
+      const sc = baseSc + slapProgress * 0.45;
       if (isWebcam) {
         // In webcam tracking mode, follow the hand's depth directly, only apply scale juice
-        const sc = 1.15 + slapProgress * 0.45;
-        this.virtualHand.scale.setScalar(sc);
+        this.virtualHand.scale.set(isLeft ? -sc : sc, sc, sc);
       } else {
         // Lunge forward in mouse mode: z goes from ~8.8 → ~0.7 at peak, then returns
         const lungeZ = pos.z - slapProgress * 8.1;
         this.virtualHand.position.z = lungeZ;
-
-        const sc = 1.15 + slapProgress * 0.45;
-        this.virtualHand.scale.setScalar(sc);
+        this.virtualHand.scale.set(isLeft ? -sc : sc, sc, sc);
       }
     } else {
-      this.virtualHand.scale.lerp(this._handScaleTarget, 0.12);
+      // Lerp back to base scale with mirroring
+      const targetX = isLeft ? -baseSc : baseSc;
+      this.virtualHand.scale.x += (targetX - this.virtualHand.scale.x) * 0.12;
+      this.virtualHand.scale.y += (baseSc - this.virtualHand.scale.y) * 0.12;
+      this.virtualHand.scale.z += (baseSc - this.virtualHand.scale.z) * 0.12;
     }
   }
 
