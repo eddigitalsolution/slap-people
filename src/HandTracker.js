@@ -227,29 +227,23 @@ export class HandTracker {
   update(deltaTime) {
     if (!this.isReady || !this.isRunning) return;
 
-    // ---------- save previous RAW position for velocity ----------
-    this._rawPrevX = this.palmCenter.x;
-    this._rawPrevY = this.palmCenter.y;
-    const wasDetected = this.handDetected;
-
-    // ---------- update raw palm center ----------
     if (this.mouseMode) {
+      // ---------- save previous mouse position for velocity ----------
+      this._rawPrevX = this.palmCenter.x;
+      this._rawPrevY = this.palmCenter.y;
       this.palmCenter.x = this._mousePos.x;
       this.palmCenter.y = this._mousePos.y;
       this.handDetected = true;
       this.handOpen     = true;
       this.handDepth    = 0.5;
+
+      if (deltaTime > 0) {
+        this.velocity.x     = (this.palmCenter.x - this._rawPrevX) / deltaTime;
+        this.velocity.y     = (this.palmCenter.y - this._rawPrevY) / deltaTime;
+        this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
+      }
     } else {
       this._detectHand();
-    }
-
-    // Reset previous frame tracking positions if the hand was just detected to prevent false velocity spikes
-    if (!wasDetected && this.handDetected) {
-      this._rawPrevX = this.palmCenter.x;
-      this._rawPrevY = this.palmCenter.y;
-      this.smoothedPalm.x = this.palmCenter.x;
-      this.smoothedPalm.y = this.palmCenter.y;
-      this.smoothedHandDepth = this.handDepth;
     }
 
     // ---------- smooth position for rendering ----------
@@ -257,20 +251,6 @@ export class HandTracker {
     this.smoothedPalm.x += (this.palmCenter.x - this.smoothedPalm.x) * lf;
     this.smoothedPalm.y += (this.palmCenter.y - this.smoothedPalm.y) * lf;
     this.smoothedHandDepth += (this.handDepth - this.smoothedHandDepth) * lf;
-
-    // ---------- velocity from RAW delta (not smoothed) ----------
-    if (deltaTime > 0) {
-      // If the hand was just detected, force velocity to 0 for this frame
-      if (!wasDetected && this.handDetected) {
-        this.velocity.x = 0;
-        this.velocity.y = 0;
-        this.velocity.speed = 0;
-      } else {
-        this.velocity.x     = (this.palmCenter.x - this._rawPrevX) / deltaTime;
-        this.velocity.y     = (this.palmCenter.y - this._rawPrevY) / deltaTime;
-        this.velocity.speed = Math.hypot(this.velocity.x, this.velocity.y);
-      }
-    }
 
     // ---------- update webcam badge ----------
     const ind = document.getElementById('hand-indicator');
@@ -295,21 +275,16 @@ export class HandTracker {
     // Throttle to ~30 fps to reduce CPU load
     const now = performance.now();
     if (now - this._lastDetectionMs < 33) return;
+    const timeDelta = (now - this._lastDetectionMs) / 1000; // in seconds
     this._lastDetectionMs = now;
 
     try {
       const results = this._landmarker.detectForVideo(this.video, now);
 
       if (results.landmarks?.length > 0) {
+        const wasDetected = this.handDetected;
         this.handDetected = true;
         const lm = results.landmarks[0];
-
-        // Palm centre: wrist + 4 knuckle bases
-        const palmIdx = [0, 5, 9, 13, 17];
-        let px = 0, py = 0;
-        palmIdx.forEach(i => { px += lm[i].x; py += lm[i].y; });
-        this.palmCenter.x = px / palmIdx.length;
-        this.palmCenter.y = py / palmIdx.length;
 
         // Open-hand detection: majority of fingertips above their base knuckle
         const tips  = [8, 12, 16, 20];
@@ -317,6 +292,13 @@ export class HandTracker {
         let openCount = 0;
         tips.forEach((t, i) => { if (lm[t].y < lm[bases[i]].y) openCount++; });
         this.handOpen = openCount >= 3;
+
+        // Palm centre: wrist + 4 knuckle bases
+        const palmIdx = [0, 5, 9, 13, 17];
+        let px = 0, py = 0;
+        palmIdx.forEach(i => { px += lm[i].x; py += lm[i].y; });
+        const nextPalmX = px / palmIdx.length;
+        const nextPalmY = py / palmIdx.length;
 
         // Calculate Hand Depth (distance between wrist landmark 0 and middle finger base landmark 9)
         const dx = lm[0].x - lm[9].x;
@@ -326,6 +308,38 @@ export class HandTracker {
         // Map normal palm distance [0.09, 0.26] to depth [0.0, 1.0]
         const rawDepth = Math.max(0, Math.min(1, (currentDist - 0.09) / 0.17));
         this.handDepth = rawDepth;
+
+        if (!wasDetected) {
+          // Reset coordinate defaults instantly to avoid motion spikes
+          this.palmCenter.x = nextPalmX;
+          this.palmCenter.y = nextPalmY;
+          this.smoothedPalm.x = nextPalmX;
+          this.smoothedPalm.y = nextPalmY;
+          this.smoothedHandDepth = rawDepth;
+
+          this.velocity.x = 0;
+          this.velocity.y = 0;
+          this.velocity.speed = 0;
+        } else {
+          // Calculate speed based on raw coordinate delta / physical detection interval (timeDelta)
+          if (timeDelta > 0) {
+            const rawVx = (nextPalmX - this.palmCenter.x) / timeDelta;
+            const rawVy = (nextPalmY - this.palmCenter.y) / timeDelta;
+            const rawSpeed = Math.hypot(rawVx, rawVy);
+
+            if (rawSpeed < 0.12) {
+              this.velocity.x = 0;
+              this.velocity.y = 0;
+              this.velocity.speed = 0;
+            } else {
+              this.velocity.x     = rawVx;
+              this.velocity.y     = rawVy;
+              this.velocity.speed = rawSpeed;
+            }
+          }
+          this.palmCenter.x = nextPalmX;
+          this.palmCenter.y = nextPalmY;
+        }
 
         // Draw overlay skeleton representation
         this._drawSkeleton(lm);

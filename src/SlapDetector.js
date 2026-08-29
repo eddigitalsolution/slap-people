@@ -24,10 +24,10 @@ export class SlapDetector {
     // Thresholds in RAW normalised-screen-space units per second.
     // (velocity is now measured from unsmoothed palmCenter delta)
     this._thresholds = {
-      weak:     0.08,
-      normal:   0.20,
-      strong:   0.40,
-      critical: 0.80,
+      weak:     0.20,
+      normal:   0.45,
+      strong:   0.80,
+      critical: 1.40,
     };
 
     this._damage = {
