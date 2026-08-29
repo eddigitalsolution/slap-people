@@ -231,6 +231,7 @@ function startGame() {
   ui.showHUD(true);
   scene3d.hideMenuHands();
   scene3d.showVirtualHand();
+  slapDetect.lastSlapTime = elapsed + 0.8; // cooldown grace period
   spawnBoss(0);
 }
 
@@ -242,6 +243,7 @@ function nextBoss() {
   gameState.setState('PLAYING');
   ui.hideAllScreens();
   ui.showHUD(true);
+  slapDetect.lastSlapTime = elapsed + 0.8; // cooldown grace period
   spawnBoss(next);
 }
 

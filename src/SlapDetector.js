@@ -19,6 +19,7 @@ export class SlapDetector {
     this.lastSlapTime = -999;
     this.sensitivity  = 1.0;  // divisor applied to raw thresholds
     this.enabled      = true;
+    this.detectionFrames = 0; // consecutive tracked frames count
 
     // Thresholds in RAW normalised-screen-space units per second.
     // (velocity is now measured from unsmoothed palmCenter delta)
@@ -49,7 +50,16 @@ export class SlapDetector {
    */
   update(currentTime) {
     if (!this.enabled) return null;
-    if (!this.handTracker.handDetected) return null;
+    
+    if (!this.handTracker.handDetected) {
+      this.detectionFrames = 0;
+      return null;
+    }
+
+    this.detectionFrames++;
+    // Ignore initial detection frames to prevent entrance noise or velocity jumps
+    if (this.detectionFrames < 10) return null;
+
     if (currentTime - this.lastSlapTime < this.cooldown) return null;
 
     const speed     = this.handTracker.velocity.speed;
